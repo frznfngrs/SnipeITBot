@@ -32,12 +32,16 @@ var bot = new builder.UniversalBot(connector, function (session) {
 bot.dialog('Asset Info', [
 function (session) {
         session.send("Asset Information ");
-        session.beginDialog('askForAssetTag');
+        session.beginDialog('askForBuilding');
+    },
+    function (session, results) {
+    session.dialogData.building = results.response;
+	session.beginDialog('askForAssetTag');
     },
     function (session, results) {
     session.dialogData.assetTag = results.response;
-	session.send("Retrieving Info on Asset: " + session.dialogData.assetTag);
-	session.send(getAssetInfo(session, session.dialogData.assetTag));
+	//session.send("Retrieving Info on Asset: " + session.dialogData.assetTag);
+	session.send(getAssetInfo(session, session.dialogData.assetTag, session.dialogData.building));
     },
 	function (session, results) {
 	session.endDialog();
@@ -56,18 +60,105 @@ bot.dialog('askForAssetTag', [
         session.endDialogWithResult(results);
     }
 ]);
+// Dialog to ask for asset information
+bot.dialog('askForBuilding', [
+    function (session) {
+        builder.Prompts.text(session, "Please provide the building you wish to search");
+		getBuildings(session);
+    },
+    function (session, results) {
+		
+        session.endDialogWithResult(results);
+    }
+]);
 
-
-
-function getAssetInfo(session, asset){
-	var options2;
-	var assets;
-	var info;
+function getBuildings(session){
+	var buildingMessage = "Choose the number of the building you want to search: \n \n ";
 	
 	var options = { 
 	
 	method: 'GET',
-	url: 'http://snipe.warren.k12.in.us/api/v1/hardware?limit=5000',
+	url: process.env.SNIPE_SERVER + '/api/v1/companies?order=asc',
+	
+	headers: 
+		{
+			'Authorization' : 'Bearer ' + process.env.SNIPE_IT_API_KEY,
+			'Accept' : 'application/json',
+			'User-Agent' : 'Request-Promise'
+		},
+		json: true
+	};
+	
+	console.log("Getting Buildings... ");
+	rp(options).then(function(buildings){
+		/* JSON Debug
+		console.log("==========================");
+		console.log("JSON Returned: " + JSON.stringify(buildings));
+		console.log("==========================");
+		*/
+		
+		var length = buildings.total;
+		
+		for(i=0; i<length; i++){
+			//Print out the Buildings
+			buildingMessage += buildings.rows[i].id + " - " + buildings.rows[i].name + "\n \n";
+		}
+		buildingMessage += "99 - Entire District"
+		session.send(buildingMessage);
+	});
+}
+function getBuilding(buildingID){
+
+var options = { 
+	
+	method: 'GET',
+	url: process.env.SNIPE_SERVER + '/api/v1/companies/' + buildingID,
+	
+	headers: 
+		{
+			'Authorization' : 'Bearer ' + process.env.SNIPE_IT_API_KEY,
+			'Accept' : 'application/json',
+			'User-Agent' : 'Request-Promise'
+		},
+		json: true
+	};
+	
+	console.log("Cross-referencing building name with ID ");
+	rp(options).then(function(building){
+		 
+		console.log("==========================");
+		console.log("JSON Returned: " + JSON.stringify(building.name));
+		console.log("==========================");
+		
+		return String(building.name);
+	});
+
+}
+
+
+
+function getAssetInfo(session, asset, building){
+	var assets;
+	var info;
+	var buildingName;
+	var found = false;
+	
+	var queryURL;
+	
+	if (building == 99){
+		console.log("Building ID: " + building);
+		queryURL = process.env.SNIPE_SERVER + '/api/v1/hardware?limit=5000';
+	}
+	else{
+		console.log("Searching all Buildings");
+		queryURL = process.env.SNIPE_SERVER + '/api/v1/hardware?limit=5000&company_id=' + building;
+		
+	}
+	
+	var options = { 
+	
+	method: 'GET',
+	url: queryURL,
 	
 	headers: 
 		{
@@ -86,14 +177,15 @@ function getAssetInfo(session, asset){
 	
 	
 	//console.log(" ");
-	var length = assets.total -1;
-	console.log(length);
+	var length = assets.total;
+	console.log("Total Assets Returned: " + length);
 	//console.log(" ");
 	for (i=0; i < length; i++) {
 		var object = assets.rows[i];
 		
 		//console.log("NOT: " + object.asset_tag);
 		if (object.asset_tag == asset) {
+			found = true;
 			console.log("============================");
 			console.log("Asset: " + asset + "; ID: " + object.id);
 			console.log("============================");
@@ -102,6 +194,10 @@ function getAssetInfo(session, asset){
 			
 		}
 		
+		
+	}
+	if(found == false){
+		session.send("Asset " + asset + " not found in current location. Please try selecting another building or use 99 for entire district");
 	}
 	
 	
@@ -117,7 +213,7 @@ function getInfo(session, id){
 	var options2 = { 
 	
 				method: 'GET',
-				url: 'http://snipe.warren.k12.in.us/api/v1/hardware/' +id,
+				url: process.env.SNIPE_SERVER + '/api/v1/hardware/' +id,
 	
 				headers: 
 				{
@@ -136,6 +232,7 @@ function getInfo(session, id){
 			var assetStatus;
 			var assignee;
 			var manufacturer;
+			var building;
 			
 			if(body.manufacturer != null){
 				manufacturer = body.manufacturer.name;
@@ -143,6 +240,8 @@ function getInfo(session, id){
 			else{
 				manufacturer = "Unknown Model";
 			}
+			
+			
 			if(body.model != null){
 				model = body.model.name;
 			}
@@ -171,12 +270,20 @@ function getInfo(session, id){
 			else{
 				category = "No Category";
 			}
+			
+			
 			if(body.status_label != null){
-				console.log(body.status_label);
 				assetStatus = body.status_label.name;
 			}
 			else{
 				assetStatus = "Unknown Status";
+			}
+			
+			if(body.company != null){
+				building = body.company.name;
+			}
+			else{
+				manufacturer = "Unknown Building";
 			}
 				
 
@@ -185,10 +292,11 @@ function getInfo(session, id){
 			var info = 
 				"Asset: " + body.asset_tag + "\n \n" +
 				"Serial: " +  serial + "\n \n" +
+				"Building: " + building + "\n \n" +
 				"Category: " + category + "\n \n" +
 				"Manufacturer: " + manufacturer + "\n \n" +
 				"Model: " + model + "\n \n" +
-				"Status:" + assetStatus + "\n \n" +
+				"Status: " + assetStatus + "\n \n" +
 				"Assigned to: " + assignee + "\n \n" 
 			;
 			session.send(info);
